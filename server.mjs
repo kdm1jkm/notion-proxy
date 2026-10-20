@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -5,6 +6,7 @@ import { readFileSync, copyFileSync, existsSync, readdirSync, statSync } from "f
 import { resolve, dirname, join, basename, extname } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
+import { tmpdir } from "os";
 
 const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
@@ -17,8 +19,15 @@ const API_BASE = `${NOTION_BASE}/api/v3`;
 
 // Find Firefox default profile
 function findFirefoxProfile() {
-  const base = join(process.env.HOME, "Library/Application Support/Firefox/Profiles");
-  if (!existsSync(base)) return null;
+  let base = null;
+  if (process.platform === "win32") {
+    base = process.env.APPDATA ? join(process.env.APPDATA, "Mozilla", "Firefox", "Profiles") : null;
+  } else if (process.platform === "darwin") {
+    base = process.env.HOME ? join(process.env.HOME, "Library", "Application Support", "Firefox", "Profiles") : null;
+  } else {
+    base = process.env.HOME ? join(process.env.HOME, ".mozilla", "firefox") : null;
+  }
+  if (!base || !existsSync(base)) return null;
   const profiles = readdirSync(base);
   // Prefer default-release, then default, then any
   const pref = profiles.find((p) => p.endsWith(".default-release"))
@@ -34,7 +43,7 @@ function loadCookiesFromFirefox() {
   const src = join(profile, "cookies.sqlite");
   if (!existsSync(src)) return null;
 
-  const tmp = "/tmp/notion_proxy_ff_cookies.sqlite";
+  const tmp = join(tmpdir(), "notion_proxy_ff_cookies.sqlite");
   copyFileSync(src, tmp);
   // Also copy WAL/SHM if present (for consistency)
   try { copyFileSync(src + "-wal", tmp + "-wal"); } catch {}
@@ -59,6 +68,13 @@ function loadCookie() {
   const now = Date.now();
   if (_cookieCache && now - _cookieCacheTime < COOKIE_TTL) return _cookieCache;
 
+  // Check explicit environment variable first
+  if (process.env.NOTION_COOKIE) {
+    _cookieCache = process.env.NOTION_COOKIE.trim();
+    _cookieCacheTime = now;
+    return _cookieCache;
+  }
+
   // Try Firefox
   try {
     const ffCookie = loadCookiesFromFirefox();
@@ -71,21 +87,24 @@ function loadCookie() {
     // Firefox read failed, fall through
   }
 
-  // Fallback to .env
-  try {
-    const envPath = resolve(__dirname, ".env");
-    const content = readFileSync(envPath, "utf-8");
-    for (const line of content.split("\n")) {
-      const match = line.match(/^NOTION_COOKIE=(.+)$/);
-      if (match) {
-        _cookieCache = match[1].trim();
-        _cookieCacheTime = now;
-        return _cookieCache;
+  // Fallback to .env in cwd or __dirname
+  for (const dir of [process.cwd(), __dirname]) {
+    try {
+      const envPath = resolve(dir, ".env");
+      if (existsSync(envPath)) {
+        const content = readFileSync(envPath, "utf-8");
+        for (const line of content.split("\n")) {
+          const match = line.match(/^NOTION_COOKIE=(.+)$/);
+          if (match) {
+            _cookieCache = match[1].trim();
+            _cookieCacheTime = now;
+            return _cookieCache;
+          }
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
-  if (process.env.NOTION_COOKIE) return process.env.NOTION_COOKIE;
   throw new Error("No cookies found. Ensure Firefox has an active Notion session, or set NOTION_COOKIE in .env");
 }
 
