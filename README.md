@@ -6,11 +6,13 @@ The official Notion API and Notion MCP integration only work in workspaces where
 
 ## Use with an AI agent
 
-Copy exactly the text of this page, nothing else, into your agent's instructions (`AGENTS.md`, `CLAUDE.md`, a system prompt):
+Copy this block, exactly as is, into your agent's instructions (`AGENTS.md`, `CLAUDE.md`, a system prompt):
 
-**https://raw.githubusercontent.com/kdm1jkm/notion-proxy/main/PROMPT.txt**
+```text
+To read or edit Notion pages (notion.so or app.notion.com links), use the notion-proxy CLI with my logged-in browser session. Run `bunx github:kdm1jkm/notion-proxy help` first and follow it.
+```
 
-The agent learns everything else from `help`.
+The agent learns everything else from `help`. The same text is served raw at https://raw.githubusercontent.com/kdm1jkm/notion-proxy/main/PROMPT.txt for scripts.
 
 ## Usage
 
