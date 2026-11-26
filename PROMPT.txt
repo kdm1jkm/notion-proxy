@@ -1,0 +1,1 @@
+To read or edit Notion pages (notion.so or app.notion.com links), use the notion-proxy CLI with my logged-in browser session. Run `bunx github:kdm1jkm/notion-proxy help` first and follow it.
