@@ -4,6 +4,14 @@ Read and edit Notion pages as a **guest**, using your browser session. A non-int
 
 The official Notion API and Notion MCP integration only work in workspaces where you can install an integration. notion-proxy calls Notion's internal API with your logged-in browser cookies instead, so it can do anything you can do in the browser, including on pages in someone else's workspace.
 
+## Use with an AI agent
+
+Copy exactly the text of this page, nothing else, into your agent's instructions (`AGENTS.md`, `CLAUDE.md`, a system prompt):
+
+**https://raw.githubusercontent.com/kdm1jkm/notion-proxy/main/PROMPT.txt**
+
+The agent learns everything else from `help`.
+
 ## Usage
 
 Requires [Bun](https://bun.sh). Nothing to install; run it straight from GitHub:
