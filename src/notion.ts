@@ -30,6 +30,14 @@ function findFirefoxProfile(base: string): string | null {
   return pref ? join(base, pref) : null;
 }
 
+/**
+ * Notion cookie hosts. Sessions now live on app.notion.com; older ones on notion.so. Other notion.com
+ * subdomains (msgstore, identity, *.notion.site) carry unrelated cookies and are left out.
+ */
+const COOKIE_HOSTS_SQL = `
+  SELECT name, value, host FROM moz_cookies
+  WHERE host IN ('app.notion.com', '.app.notion.com', 'notion.com', '.notion.com') OR host LIKE '%notion.so'`;
+
 /** Reads Notion cookies from a copy of Firefox's cookies.sqlite, since Firefox keeps the original locked. */
 function loadCookiesFromFirefox(cookiesDb: string): string | null {
   const dir = mkdtempSync(join(tmpdir(), "notion-proxy-"));
@@ -42,10 +50,11 @@ function loadCookiesFromFirefox(cookiesDb: string): string | null {
     }
     const db = new Database(tmp, { readonly: true });
     try {
-      const rows = db
-        .query<{ name: string; value: string }, []>("SELECT name, value FROM moz_cookies WHERE host LIKE '%notion.so'")
-        .all();
-      return rows.length ? rows.map((r) => `${r.name}=${r.value}`).join("; ") : null;
+      const rows = db.query<{ name: string; value: string; host: string }, []>(COOKIE_HOSTS_SQL).all();
+      // Prefer the notion.com session; mixing in a stale notion.so token_v2 would send two sessions
+      const current = rows.filter((r) => !r.host.endsWith("notion.so"));
+      const chosen = current.some((r) => r.name === "token_v2") ? current : rows.filter((r) => r.host.endsWith("notion.so"));
+      return chosen.length ? chosen.map((r) => `${r.name}=${r.value}`).join("; ") : null;
     } finally {
       db.close();
     }
@@ -89,7 +98,7 @@ function loadCookie(): string {
     try {
       const cookie = existsSync(db) ? loadCookiesFromFirefox(db) : null;
       if (cookie?.includes("token_v2=")) return found(cookie);
-      checked.push(`${db} (${existsSync(db) ? "no notion.so token_v2 cookie" : "missing"})`);
+      checked.push(`${db} (${existsSync(db) ? "no Notion token_v2 cookie" : "missing"})`);
     } catch (e) {
       checked.push(`${db} (unreadable: ${e instanceof Error ? e.message : e})`);
     }
@@ -107,7 +116,7 @@ function loadCookie(): string {
   throw new CliError(
     "auth",
     `no Notion session found. Checked:\n${checked.map((c) => `  - ${c}`).join("\n")}`,
-    "Log in to notion.so in Firefox, or set NOTION_COOKIE to the Cookie header of a logged-in notion.so request (browser devtools > Network).",
+    "Log in to Notion in Firefox, or set NOTION_COOKIE to the Cookie header of a logged-in app.notion.com request (browser devtools > Network).",
   );
 }
 
@@ -135,13 +144,14 @@ async function errorFromResponse(what: string, res: Response): Promise<CliError>
   const body = await res.text();
   let detail = body;
   try {
-    const parsed = JSON.parse(body) as { message?: string };
-    if (parsed.message) detail = parsed.message;
+    // debugMessage names the cause ("Invalid ancestor path"); message is a generic "Something went wrong"
+    const parsed = JSON.parse(body) as { message?: string; debugMessage?: string };
+    detail = parsed.debugMessage ?? parsed.message ?? body;
   } catch {}
   detail = detail.length > 300 ? `${detail.slice(0, 300)}...` : detail;
   const message = `${what} failed: HTTP ${res.status}${detail ? ` ${detail}` : ""}`;
   if (res.status === 401) {
-    return new CliError("auth", message, "The Notion session has expired. Log in to notion.so in Firefox again, or refresh NOTION_COOKIE.");
+    return new CliError("auth", message, "The Notion session has expired. Log in to Notion in Firefox again, or refresh NOTION_COOKIE.");
   }
   if (res.status === 403) {
     return new CliError("auth", message, "Your Notion account cannot do this on this page. Check that you can do it in the browser.");
@@ -534,10 +544,10 @@ export type BlockType = (typeof BLOCK_TYPES)[number];
 async function insertBlock(
   parentId: string,
   spaceId: string,
-  record: { type: string; properties: Record<string, unknown>; format?: Record<string, unknown> },
+  record: { type: string; properties: Record<string, unknown>; format?: Record<string, unknown>; file_ids?: string[] },
   after?: string,
-  id: string = crypto.randomUUID(),
 ): Promise<string> {
+  const id = crypto.randomUUID();
   await saveTransactions(spaceId, [
     {
       pointer: { table: "block", id, spaceId },
@@ -606,43 +616,62 @@ const IMAGE_MIME: Record<string, string> = {
   webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp",
 };
 
-/** Uploads a local file to Notion's storage and returns the URL to use as the image source. */
-async function uploadFile(filePath: string, blockId: string, spaceId: string): Promise<string> {
+/**
+ * Uploads a local file to Notion's storage. Notion requires the upload to be attached to an existing
+ * block, so it is attached to the page that will hold the image.
+ */
+async function uploadFile(filePath: string, pageId: string, spaceId: string): Promise<{ url: string; fileId: string }> {
   const file = Bun.file(filePath);
-  if (!(await file.exists())) {
-    throw new CliError("usage", `file not found: ${filePath}`, "Pass an http(s) URL or the path of an existing image file.");
-  }
   const contentType = IMAGE_MIME[extname(filePath).toLowerCase().slice(1)] ?? "application/octet-stream";
-  const { url, signedPutUrl, fields } = await api<{ url: string; signedPutUrl: string; fields?: Record<string, string> }>(
+  const { url, signedPutUrl, putHeaders, linkedFileId } = await api<{
+    url: string;
+    signedPutUrl: string;
+    putHeaders?: { name: string; value: string }[];
+    linkedFileId: string;
+  }>(
     "getUploadFileUrl",
     {
       bucket: "secure",
       name: basename(filePath),
       contentType,
       contentLength: file.size,
-      record: { table: "block", id: blockId, spaceId },
+      record: { table: "block", id: pageId, spaceId },
       supportExtraHeaders: true,
     },
     spaceId,
   );
-  await request(signedPutUrl, { method: "PUT", headers: { "Content-Type": contentType, ...fields }, body: file }, "file upload");
-  return url;
+  // putHeaders are part of the S3 signature; Content-Length is set by fetch from the body
+  const headers: Record<string, string> = { "Content-Type": contentType };
+  for (const { name, value } of putHeaders ?? []) {
+    if (name.toLowerCase() !== "content-length") headers[name] = value;
+  }
+  await request(signedPutUrl, { method: "PUT", headers, body: file }, "file upload");
+  return { url, fileId: linkedFileId };
 }
 
 export async function addImage(opts: { page: string; source: string; after?: string }): Promise<{ block_id: string; source: string }> {
   const pageId = parseId(opts.page);
+  const isUrl = /^https?:\/\//i.test(opts.source);
+  const filePath = resolve(opts.source);
+  if (!isUrl && !(await Bun.file(filePath).exists())) {
+    throw new CliError("usage", `file not found: ${filePath}`, "Pass an http(s) URL or the path of an existing image file.");
+  }
   const spaceId = await getSpaceId(pageId);
-  // The upload is attached to the block before the block exists, so the ID is chosen up front
-  const id = crypto.randomUUID();
-  const source = /^https?:\/\//i.test(opts.source) ? opts.source : await uploadFile(resolve(opts.source), id, spaceId);
-  await insertBlock(
+  const upload = isUrl ? undefined : await uploadFile(filePath, pageId, spaceId);
+  const source = upload?.url ?? opts.source;
+  const blockId = await insertBlock(
     pageId,
     spaceId,
-    { type: "image", properties: { source: [[source]] }, format: { display_source: source } },
+    {
+      type: "image",
+      properties: { source: [[source]] },
+      format: { display_source: source },
+      // Links the uploaded file to the block, so it is shown and kept
+      ...(upload && { file_ids: [upload.fileId] }),
+    },
     opts.after,
-    id,
   );
-  return { block_id: id, source };
+  return { block_id: blockId, source };
 }
 
 export async function createPage(opts: { parent: string; title: string; after?: string }): Promise<{ page_id: string; url: string }> {

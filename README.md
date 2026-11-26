@@ -43,7 +43,7 @@ Run `help <command>` for a command's options, output, and examples.
 
 ## Authentication
 
-Cookies are read from Firefox's cookie store, so being logged in to notion.so in Firefox is enough. The store is re-read at most once a minute, so session renewals are picked up.
+Cookies are read from Firefox's cookie store, so being logged in to Notion in Firefox is enough. Both the current `app.notion.com` session and older `notion.so` sessions are found. The store is re-read at most once a minute, so session renewals are picked up.
 
 | OS | Firefox profiles |
 |----|------|
@@ -51,7 +51,7 @@ Cookies are read from Firefox's cookie store, so being logged in to notion.so in
 | Linux | `~/.mozilla/firefox/` |
 | Windows | `%APPDATA%\Mozilla\Firefox\Profiles\` |
 
-Without Firefox, set `NOTION_COOKIE` to the `Cookie` header of a logged-in notion.so request (browser devtools > Network). Put it in the environment, or in a `.env` file in the current directory (see `.env.example`).
+Without Firefox, set `NOTION_COOKIE` to the `Cookie` header of a logged-in `app.notion.com` request (browser devtools > Network). Put it in the environment, or in a `.env` file in the current directory (see `.env.example`).
 
 Write access is whatever your Notion account has: a read-only guest can only read.
 

@@ -99,9 +99,9 @@ ${table([
 Text options marked "'-' reads standard input" take multi-line text from a pipe: --text -
 
 Authentication:
-  Cookies are read from Firefox's cookie store, so being logged in to notion.so in Firefox is
-  enough. Otherwise set NOTION_COOKIE to the Cookie header of a logged-in notion.so request,
-  in the environment or in a .env file in the current directory.
+  Cookies are read from Firefox's cookie store, so being logged in to Notion in Firefox is
+  enough. Otherwise set NOTION_COOKIE to the Cookie header of a logged-in app.notion.com
+  request, in the environment or in a .env file in the current directory.
 
 Examples:
   ${PROGRAM} read-page https://www.notion.so/Roadmap-0123456789abcdef0123456789abcdef
